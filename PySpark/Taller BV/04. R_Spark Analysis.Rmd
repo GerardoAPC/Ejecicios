@@ -1,0 +1,211 @@
+
+---
+title: "04. R_Spark Analysis"
+output:
+  html_document:
+    toc: true
+---
+
+
+```{r}
+%md
+# Análisis de datos por medio de Descriptivos con Azure Databricks
+En este notebook se implementará un código en Python para hacer la caracterización de los datos subidos a HIVE.
+
+## Prerrequisitos
+1. Cargar los datos en HIVE (ver notebook de <a href="$./0. Importación y Limpieza Datos"> importación de datos</a>)
+2. Realizar Caracterización estadística de los datos (ver notebook de <a href="$./1. Caracterización"> Caracterización</a>)
+
+## Objetivos
+1. Consumir tablas almacenadas en HIVE
+2. Realizar descriptivos para visualizar el comportameinto de los datos respecto a Churn
+```
+
+
+```{r}
+%md
+###Índice
+1. Glosario
+2. Librerías necesarias a utilizar
+3. Conexión con Databricks
+4. Carga de tablas desde Hive
+5. Análisis descriptivo
+```
+
+
+```{r}
+%md
+## 1. Glosario
+
+* Vector: Conjunto de elementos numeros del mismo tipo
+* Data Frame: Conjunto de vectores de la misma longitud.
+* Matriz: Conjunto de vectores númericos de la misma longitud
+```
+
+
+```{r}
+%md
+## 2. Librerias necesarias a utilizar
+
+Las librerias a usar son:
+
+* [```SparkR```](https://spark.apache.org/docs/latest/sparkr.html)
+* [```sparklyr```](https://spark.rstudio.com/)
+* [```DBI```](https://db.rstudio.com/dbi/)
+* [```tidyr```](https://cran.r-project.org/web/packages/tidyr/tidyr.pdf)
+* [```dplyr```](https://www.rdocumentation.org/packages/dplyr/versions/0.7.8)
+* [```magrittr```](https://cran.r-project.org/web/packages/magrittr/vignettes/magrittr.html)
+* [```ggplot2```](https://ggplot2.tidyverse.org/)
+```
+
+
+```{r}
+library("sparklyr") # Connect to Spark from R
+#library("DBI") # separates the connectivity to the DBMS into a “front-end” and a “back-end”
+#library("tidyr") # Easily Tidy Data 
+library("dplyr") #  tool for working with data frame like objects
+library("magrittr") # decrease development time and to improve readability and maintainability of code
+library("ggplot2") # creating graphics
+#library("lubridate") # Date handling
+```
+
+
+```{r}
+%md
+## 3. Conexion con Databricks
+
+A continuacion se configura la conexion con databricks, primero se define el tipo de conexion con Spark
+```
+
+
+```{r}
+# Declaracion de spark connection en DBR
+
+sc <- spark_connect(method = "databricks")
+```
+
+
+```{r}
+%md
+## 4. Carga de tablas desde Hive
+
+Se cargan los archivos manualmente en __Data/Tables__ , primero se actualiza la tabla en la que se va a trabajar con ```dbGetQuery```, los parametros de entrada son ```sc``` y  ```SQLR```, luego se cargan los datos al dataframe ```Secop_iDF``` en R con la misma funcion cambiando ```SQLR``` por ```SQLL```.
+
+Por facilidad se creara la funcion ```importHive``` que recibe el nombre de la tabla y retorna el dataframe de esta.
+
+---
+(Notese que ```SQLR``` y ```SQLL``` tiene la sintaxis de SQL)
+```
+
+
+```{r}
+#RDD Sparklyr
+df <- sdf_sql(sc, "select * from taller.churn")
+
+#Collect vuelve el RDD un Dataframe
+df %>% head(5) %>% collect() %>% display()
+```
+
+
+```{r}
+#Número particiones del dataframe
+sdf_num_partitions(df)
+```
+
+
+```{r}
+%md
+## 5. Análisis descriptivo
+```
+
+
+```{r}
+%md
+
+Se sabe que la columna `tenure` es el tiempo de permanencia de una presona en la compania, por lo tanto se cambia el tipo de dato `character` a `double`, para posteriormente hacer graficas de tiempo en funcion de churn
+```
+
+
+```{r}
+%md
+
+# OJO
+
+Para tener medidas estadisticas de churn, se decide cambiar agregar una columna al dataframe original en donde se transforma churn a un valor binario, el codigo se muestra a continuación
+```
+
+
+```{r}
+#Cambio de Churn a binario
+df %<>% mutate(churnbin = if_else(Churn == "YES",1,0)) 
+df %>% head(5) %>%collect() %>% display()
+```
+
+
+```{r}
+%md
+
+Como primer acercamiento a los datos veremos el churn en funcion de la permanencia en la compania.
+
+Note que disminuye a medida que transcurre el tiempo
+```
+
+
+```{r}
+df %>% ggplot(aes(x=tenure, fill=Churn)) + geom_bar() + ggtitle("HOP")
+```
+
+
+```{r}
+%md
+
+Ahora veremos el porcentaje de presonas que abandonan la compañía en función del tiempo
+```
+
+
+```{r}
+df %>% group_by(tenure) %>% 
+summarise(churn  = mean ( churnbin )) %>% 
+ggplot() + geom_bar(aes(x=tenure, y=churn), stat = "identity")
+```
+
+
+```{r}
+df %>% group_by(tenure) %>%
+summarise(churn  = mean ( churnbin )) %>% ggplot(aes(x=tenure, y=churn)) + geom_line()
+```
+
+
+```{r}
+%md
+
+Un caso para analizar es diferenciar del procentaje de churn entre clientes masculinos y femeninos por mes, lo cual se hace a continuacion
+```
+
+
+```{r}
+df %>% group_by(tenure  , gender) %>% summarise(churn  = mean ( churnbin ) , q = n()) %>% ggplot() + geom_line(aes(x=tenure, y=churn ,  colour = gender)) + geom_point(aes(x=tenure, y=churn , size = q , colour = gender ) ) #+ facet_wrap(.~gender)
+```
+
+
+```{r}
+%md
+
+Por ultimo se hara una segmentacion por tipo de servicio contratado (DSL, Fiber optic y No) y de tipo de pago de factura, para ver posibles estrategias a tomar en los diferentes casos
+```
+
+
+```{r}
+df  %>% group_by(tenure  , gender , InternetService , PaymentMethod) %>% 
+summarise(churn  = mean ( churnbin ) , q = n())  %>%  filter( churn > 0)   %>% 
+ggplot() + geom_line(aes(x=tenure, y=churn ,  colour = gender)) + 
+geom_point(aes(x=tenure, y=churn , size = q , colour = gender ) ) + 
+facet_grid( PaymentMethod~InternetService)
+```
+
+
+```{r}
+%md
+Habiendo realizado la visualización de descriptivos se procede a construir el modelo predictivo mediante el siguiente notebook <a href="$./3. Modelamiento Predictivo"> Modelamiento Predictivo</a>
+```
+
